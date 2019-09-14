@@ -1,4 +1,4 @@
-from io import StringIO
+from io import StringIO, BytesIO
 import BB_code
 import pandas as pd
 from pandas.testing import assert_frame_equal as afe
@@ -25,24 +25,42 @@ def file_gen():
 
 def test_read_df(file_gen):
     infile = file_gen()
-    result = BB_code.read_df(1, 1, 1, 1, 0, 1, infile)
+    result = BB_code.read_df(infile, 'ch0', 'ch1', 1)
     name, df = next(result)
-    assert name == 'BP677536'
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536'],
-        'channel1': [180, 189],
-        'channel2': [440, 459]
+        'ch0': [180, 189],
+        'sum': [620, 648]
     }))
     with pytest.raises(StopIteration):
         next(result)
 
     infile = file_gen()
-    result = BB_code.read_df(1.0/400, 1, 1, 0, 2, 1, infile)
+    result = BB_code.read_df(infile, 'ch2', 'sum', 1.0/400)
     name, df = next(result)
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536'],
-        'channel1': [1, 1],
-        'channel2': [10, 10]
+        'ch2': [1, 1],
+        'sum': [11, 11]
     }))
     with pytest.raises(StopIteration):
         next(result)
+
+
+def test_main(file_gen, mocker):
+    stanmodel = mocker.patch('BB_code.pystan.StanModel')
+    stanmodel.return_value.sampling.return_value.extract.return_value = {
+        'mu': list(range(101))}
+    mocker.patch('BB_code.sys.argv', ['', 'ch0', 'ch1', 1, 0.95])
+    infile = file_gen()
+    output = BytesIO()
+
+    BB_code.main(infile, output)
+    output.seek(0)
+    out = pd.read_csv(output)
+    afe(out, pd.DataFrame({
+        'index': ['BP677536'],
+        '0.025': [2.5],
+        '0.5': [50],
+        '0.975': [97.5]
+    }))
