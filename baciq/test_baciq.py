@@ -47,6 +47,18 @@ def test_read_df(file_gen):
     with pytest.raises(StopIteration):
         next(result)
 
+    infile = file_gen()
+    result = baciq.read_df(infile, 'ch2', 'sum', 1.0/400, False)
+    name, df = next(result)
+    assert name == 'all'
+    afe(df, pd.DataFrame({
+        'Protein ID': ['BP677536', 'BP677536', 'BP677537'],
+        'ch2': [1, 1, 1],
+        'sum': [11, 11, 11]
+    }))
+    with pytest.raises(StopIteration):
+        next(result)
+
 
 def test_read_df_with_non_numeric():
     infile = StringIO(
@@ -66,9 +78,8 @@ def test_read_df_with_non_numeric():
 
 
 def test_main(file_gen, mocker):
-    stanmodel = mocker.patch('baciq.pystan.StanModel')
-    stanmodel.return_value.sampling.return_value.extract.return_value = {
-        'mu': list(range(101))}
+    stanmodel = mocker.patch('baciq.inference_methods.Stan_Single')
+    stanmodel.return_value.fit_quantiles.return_value = [2.5, 50, 97.5]
 
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -86,13 +97,14 @@ def test_main(file_gen, mocker):
             '0.5': [50],
             '0.975': [97.5],
         }))
+        stanmodel.assert_called_once_with('stan_single.pkl')
 
 
 def test_main_two_prot(file_gen, mocker):
-    stanmodel = mocker.patch('baciq.pystan.StanModel')
-    stanmodel.return_value.sampling.return_value.extract.side_effect = [
-        {'mu': list(range(101))},
-        {'mu': list(range(2, 202, 2))}
+    stanmodel = mocker.patch('baciq.inference_methods.Stan_Single')
+    stanmodel.return_value.fit_quantiles.side_effect = [
+        [2.5, 50, 97.5],
+        [6.95, 101, 195.05],
     ]
 
     runner = CliRunner()
@@ -109,7 +121,6 @@ def test_main_two_prot(file_gen, mocker):
         result = runner.invoke(
             baciq.main,
             '-c1 ch0 -c2 ch1 -i infile.csv -o outfile.csv'.split())
-        print(result)
         assert result.exit_code == 0
         out = pd.read_csv('outfile.csv')
         afe(out, pd.DataFrame({

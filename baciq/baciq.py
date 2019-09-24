@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-import pystan
 import click
+import inference_methods
 
 
 @click.command()
@@ -23,31 +23,12 @@ def main(channel1, channel2, scaling, confidence, infile, outfile):
         'high': 0.5 + confidence / 2,
     }
 
-    # The model and its compilation
-    code = """data {
-         int<lower=2> J;          // number of coins
-         int<lower=0> y[J];       // heads in respective coin trials
-         int<lower=0> n[J];       // total in respective coin trials
-    }
-    parameters {
-         real<lower = 0, upper = 1> mu;
-         real<lower = 0> kappa;
-    }
-    transformed parameters {
-        real<lower=0> alpha;
-        real<lower=0> beta;
+    # model = inference_methods.Stan_Single('stan_single.pkl')
+    # model = inference_methods.PYMC_Single()
+    # grouped = True
 
-        alpha = kappa * mu;
-        beta = kappa - alpha;
-    }
-    model {
-        mu ~ uniform(0, 1);
-        kappa ~ exponential(0.05);
-        y ~ beta_binomial(n, alpha, beta);
-    }
-
-    """
-    stanmodel = pystan.StanModel(model_name='baciq', model_code=code)
+    model = inference_methods.PYMC_Multiple()
+    grouped = False
 
     # formatting is necessary to handle floating point issues of columns
     lo = f'{confidence["low"]:.9g}'
@@ -61,28 +42,28 @@ def main(channel1, channel2, scaling, confidence, infile, outfile):
         hi: []
     }
 
-    for name, df_temp in read_df(infile, channel1, channel2, scaling):
+    for name, df in read_df(infile, channel1, channel2, scaling, grouped):
         print(name)
-        fit = stanmodel.sampling(
-            chains=1, seed=2, iter=5005000, warmup=5000, refresh=-1,
-            data={'J': len(df_temp),  # Number of peptides
-                  'y': df_temp[channel1],
-                  'n': df_temp['sum']})
-        sim = fit.extract()
-        quants = pd.DataFrame(sim["mu"], columns=['mu']).quantile(
-            [confidence['low'], 0.5, confidence['high']])
+        quants = model.fit_quantiles(
+            df, channel1, [confidence['low'], 0.5, confidence['high']])
 
-        output['Protein ID'].append(name)
-        output[lo].append(quants.iloc[0, 0])
-        output[mid].append(quants.iloc[1, 0])
-        output[hi].append(quants.iloc[2, 0])
+        if grouped:
+            output['Protein ID'].append(name)
+            output[lo].append(quants[0])
+            output[mid].append(quants[1])
+            output[hi].append(quants[2])
+        else:
+            output['Protein ID'] = df['Protein ID'].unique()
+            output[lo] = quants[0, :]
+            output[mid] = quants[1, :]
+            output[hi] = quants[2, :]
 
     # %g handles floating point issues in row entries
     pd.DataFrame(output).to_csv(
         outfile, index=False, float_format='%.9g')
 
 
-def read_df(infile, channel1, channel2, multiplier):
+def read_df(infile, channel1, channel2, multiplier, grouped=True):
     baciq = pd.read_csv(infile)
 
     # Multiply by the factor
@@ -101,9 +82,12 @@ def read_df(infile, channel1, channel2, multiplier):
 
     baciq = baciq[['Protein ID', channel1, 'sum']]
 
-    for name, df in baciq.groupby('Protein ID'):
-        if len(df) > 1:
-            yield name, df
+    if grouped:
+        for name, df in baciq.groupby('Protein ID'):
+            if len(df) > 1:
+                yield name, df
+    else:
+        yield 'all', baciq
 
 
 if __name__ == '__main__':
