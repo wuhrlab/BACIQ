@@ -16,8 +16,19 @@ import inference_methods
 @click.option('-i', '--infile', type=click.File('r'),
               help='Input csv file containing counts data')
 @click.option('-o', '--outfile', type=click.File('w'),
-              help='Output file')
-def main(channel1, channel2, scaling, confidence, infile, outfile):
+              help='Output file, can be csv or pkl')
+@click.option('-b', '--bin-width', type=float, default=None,
+              help='Bin width for histogram output.  If specified, '
+              'confidence will be ignored')
+@click.option('--samples', default=5000,
+              help='Number of samples for MCMC')
+@click.option('--chains', default=4,
+              help='Number of MCMC chains')
+def main(channel1, channel2, scaling,
+         confidence, bin_width,
+         samples, chains,
+         infile, outfile):
+
     confidence = {
         'low': 0.5 - confidence / 2,
         'high': 0.5 + confidence / 2,
@@ -30,41 +41,65 @@ def main(channel1, channel2, scaling, confidence, infile, outfile):
     model = inference_methods.PYMC_Multiple()
     grouped = False
 
-    # formatting is necessary to handle floating point issues of columns
-    lo = f'{confidence["low"]:.9g}'
-    mid = str(0.5)
-    hi = f'{confidence["high"]:.9g}'
+    if bin_width is not None:  # only for ungrouped!
+        for name, df in read_df(infile, channel1, channel2, scaling, False):
+            print('Generating histogram')
+            hist = model.fit_histogram(
+                df, channel1,
+                bin_width,
+                samples, chains
+            )
 
-    output = {  # Dict for pd
-        'Protein ID': [],
-        lo: [],
-        mid: [],
-        hi: []
-    }
+        output = pd.DataFrame(
+            hist, index=df['Protein ID'].unique(),
+            columns=[bin_width*i for i in range(hist.shape[1])]
+        )
 
-    for name, df in read_df(infile, channel1, channel2, scaling, grouped):
-        print(name)
-        quants = model.fit_quantiles(
-            df, channel1, [confidence['low'], 0.5, confidence['high']])
+    else:
+        # formatting is necessary to handle floating point issues of columns
+        lo = f'{confidence["low"]:.9g}'
+        mid = str(0.5)
+        hi = f'{confidence["high"]:.9g}'
 
-        if grouped:
-            output['Protein ID'].append(name)
-            output[lo].append(quants[0])
-            output[mid].append(quants[1])
-            output[hi].append(quants[2])
-        else:
-            output['Protein ID'] = df['Protein ID'].unique()
-            output[lo] = quants[0, :]
-            output[mid] = quants[1, :]
-            output[hi] = quants[2, :]
+        output = {  # Dict for pd
+            'Protein ID': [],
+            lo: [],
+            mid: [],
+            hi: []
+        }
 
-    # %g handles floating point issues in row entries
-    pd.DataFrame(output).to_csv(
-        outfile, index=False, float_format='%.9g')
+        for name, df in read_df(infile, channel1, channel2, scaling, grouped):
+            print(name)
+            quants = model.fit_quantiles(
+                df, channel1,
+                [confidence['low'], 0.5, confidence['high']],
+                samples, chains
+            )
+
+            if grouped:
+                output['Protein ID'].append(name)
+                output[lo].append(quants[0])
+                output[mid].append(quants[1])
+                output[hi].append(quants[2])
+            else:
+                output['Protein ID'] = df['Protein ID'].unique()
+                output[lo] = quants[0, :]
+                output[mid] = quants[1, :]
+                output[hi] = quants[2, :]
+
+        output = pd.DataFrame(output)
+
+    if outfile.name.endswith('.csv'):
+        # %g handles floating point issues in row entries
+        output.to_csv(outfile,
+                      index=(bin_width is not None),
+                      float_format='%.9g')
+    else:
+        output.to_pkl(outfile)
 
 
 def read_df(infile, channel1, channel2, multiplier, grouped=True):
-    baciq = pd.read_csv(infile)
+    baciq = pd.read_csv(infile).dropna(axis='columns', how='all')
 
     # Multiply by the factor
     numeric_columns = baciq.select_dtypes(include=['number']).columns
