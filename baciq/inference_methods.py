@@ -5,8 +5,7 @@ from pystan import StanModel
 import pymc3 as pm
 import pickle
 import os
-import sqlalchemy
-import sqlite3
+import hist_backend
 
 
 class Base_Modeler(ABC):
@@ -87,75 +86,69 @@ class PYMC_Multiple(Base_Modeler):
         super().__init__()
 
     def fit_quantiles(self, data, channel1, quantiles,
-                      samples, chains, db='tempMC.sqlite'):
+                      samples, chains):
         '''
         Fit the model with supplied data.  If quantiles is set to a single
         number, will return a histogram of the samples, otherwise the quantiles
         will be returned.
         '''
-        self.mcmc_sample(data, channel1, samples, chains, db)
-        engine = sqlalchemy.create_engine(f'sqlite:///{db}')
-        with engine.connect() as conn, conn.begin():
-            results = pd.read_sql_table('μ', engine)
+        bin_width = 0.0002
+        samples = self.mcmc_sample(data, channel1, samples,
+                                   chains, bin_width=bin_width)
 
-        return np.quantile(results.iloc[:, 3:],
-                           quantiles, axis=0)
+        bins = np.array(range(samples.shape[1])) * bin_width + bin_width / 2
+        # scale counts by total, get cumsum
+        quants = np.cumsum(samples / np.sum(samples, axis=1)[:, None], axis=1)
+
+        result = None
+        for q in quantiles:
+            idx = np.argmin(np.abs(quants - q), axis=1)
+            if result is None:
+                result = bins[idx].reshape((len(idx), 1))
+            else:
+                result = np.hstack((result, bins[idx].reshape((len(idx), 1))))
+
+        return result
 
     def fit_histogram(self, data, channel1, bin_width,
-                      samples, chains, db='tempMC.sqlite'):
+                      samples, chains):
         '''
         Fit the model with supplied data.  If quantiles is set to a single
         number, will return a histogram of the samples, otherwise the quantiles
         will be returned.
         '''
-        self.mcmc_sample(data, channel1, samples, chains, db)
-        bins = int(np.ceil(1 / bin_width))
-        result = None
+        result = self.mcmc_sample(data, channel1, samples,
+                                  chains, bin_width)
 
-        engine = sqlalchemy.create_engine(f'sqlite:///{db}')
-        with engine.connect() as conn, conn.begin():
-            for df in pd.read_sql_table('μ', engine, chunksize=1000):
-                hist = np.apply_along_axis(
-                    lambda x: np.histogram(x, bins, range=(0, 1))[0],
-                    axis=0,
-                    arr=df.iloc[:, 3:].values)
-                if result is None:
-                    result = hist
-                else:
-                    result += hist
+        return result
 
-        return np.transpose(result)
-
-    def mcmc_sample(self, data, channel1, samples, chains, db):
+    def mcmc_sample(self, data, channel1, samples, chains, bin_width):
         '''
         fit the model, writing samples to sqlite database
         '''
         idx = pd.Categorical(data['Protein ID']).codes
         groups = np.unique(idx)
+        groupmeans = data.groupby(['Protein ID']).aggregate(
+            lambda x: np.mean(x[channel1] / x['sum']))['sum'].values
         with pm.Model():
-            τ = pm.Gamma('τ', alpha=3, beta=0.1)
-            μ = pm.Uniform('μ', 0, 1, shape=len(groups))
-            κ = pm.Exponential('κ', τ, shape=len(groups))
+            τ = pm.Gamma('τ', alpha=7.5, beta=1)
+            BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=1)
+            μ = BoundedNormal('μ', mu=groupmeans, sigma=1, shape=len(groups))
+            #μ = pm.Uniform('μ', 0, 1, shape=len(groups))
+            #κ = pm.Exponential('κ', τ, shape=len(groups))
+            κ = pm.HalfNormal('κ', 10, shape=len(groups))
             θ = pm.Beta('θ', alpha=μ*κ, beta=(1.0-μ)*κ, shape=len(groups))
             pm.Binomial('y', p=θ[idx], observed=data[channel1], n=data['sum'])
-            db = pm.backends.SQLite(db, vars=[μ])
+            db = hist_backend.Histogram('hist', vars=[μ],
+                                        bin_width=bin_width,
+                                        remove_first=1000*chains)
             try:
+                # print(pm.summary(
+                #     pm.sample(samples, discard_tuned_samples=True,
+                #               tune=500, chains=chains), 'κ'))
                 pm.sample(samples, discard_tuned_samples=True,
-                          tune=500, chains=chains, trace=db)
-            except sqlite3.ProgrammingError:
-                # because pymc3 doesn't support sqlite really...
-                pass
+                          tune=1000, chains=chains, trace=db)
+            except ValueError:
+                pass  # since the db doesn't keep track of chains, draws
 
-    def batch_simulate(model, samples, chains, batch_size):
-        # TODO this isn't working :(
-        with model:
-            trace = pm.sample(batch_size, progressbar=False,
-                              discard_tuned_samples=True, chains=chains)
-        yield trace
-        tot = batch_size
-        while tot < samples:
-            with model:
-                trace = pm.sample(batch_size, tune=0, init=None,
-                                  progressbar=False, trace=trace)
-            tot += batch_size
-            yield trace
+            return db.hist['μ']

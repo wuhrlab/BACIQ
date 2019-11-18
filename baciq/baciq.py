@@ -20,9 +20,9 @@ import inference_methods
 @click.option('-b', '--bin-width', type=float, default=None,
               help='Bin width for histogram output.  If specified, '
               'confidence will be ignored')
-@click.option('--samples', default=5000,
+@click.option('--samples', default=1000,
               help='Number of samples for MCMC')
-@click.option('--chains', default=4,
+@click.option('--chains', default=5,
               help='Number of MCMC chains')
 def main(channel1, channel2, scaling,
          confidence, bin_width,
@@ -83,9 +83,9 @@ def main(channel1, channel2, scaling,
                 output[hi].append(quants[2])
             else:
                 output['Protein ID'] = df['Protein ID'].unique()
-                output[lo] = quants[0, :]
-                output[mid] = quants[1, :]
-                output[hi] = quants[2, :]
+                output[lo] = quants[:, 0]
+                output[mid] = quants[:, 1]
+                output[hi] = quants[:, 2]
 
         output = pd.DataFrame(output)
 
@@ -122,6 +122,10 @@ def read_df(infile, channel1, channel2, multiplier, grouped=True):
             if len(df) > 1:
                 yield name, df
     else:
+        counts = baciq['Protein ID'].value_counts()
+        inds = counts[counts < 24].index
+        baciq = baciq.loc[
+            baciq['Protein ID'].isin(inds)]
         yield 'all', baciq
 
 
