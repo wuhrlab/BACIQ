@@ -133,19 +133,17 @@ class PYMC_Multiple(Base_Modeler):
         with pm.Model():
             τ = pm.Gamma('τ', alpha=7.5, beta=1)
             BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=1)
-            μ = BoundedNormal('μ', mu=groupmeans, sigma=1, shape=len(groups))
+            #μ = BoundedNormal('μ', mu=groupmeans, sigma=1, shape=len(groups))
+            μ = BoundedNormal('μ', mu=0.5, sigma=1, shape=len(groups))
             #μ = pm.Uniform('μ', 0, 1, shape=len(groups))
-            #κ = pm.Exponential('κ', τ, shape=len(groups))
-            κ = pm.HalfNormal('κ', 10, shape=len(groups))
+            κ = pm.Exponential('κ', τ, shape=len(groups))
+            #κ = pm.HalfNormal('κ', 10, shape=len(groups))
             θ = pm.Beta('θ', alpha=μ*κ, beta=(1.0-μ)*κ, shape=len(groups))
             pm.Binomial('y', p=θ[idx], observed=data[channel1], n=data['sum'])
             db = hist_backend.Histogram('hist', vars=[μ],
                                         bin_width=bin_width,
                                         remove_first=1000*chains)
             try:
-                # print(pm.summary(
-                #     pm.sample(samples, discard_tuned_samples=True,
-                #               tune=500, chains=chains), 'κ'))
                 pm.sample(samples, discard_tuned_samples=True,
                           tune=1000, chains=chains, trace=db)
             except ValueError:

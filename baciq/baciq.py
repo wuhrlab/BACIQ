@@ -21,12 +21,16 @@ import inference_methods
               help='Bin width for histogram output.  If specified, '
               'confidence will be ignored')
 @click.option('--samples', default=1000,
-              help='Number of samples for MCMC')
+              help='Number of samples for MCMC per chain')
 @click.option('--chains', default=5,
               help='Number of MCMC chains')
+@click.option('--batch-size', default=None, type=int,
+              help='Number of proteins to run at once')
+@click.option('--include-highest', default=None, type=int,
+              help='Include the proteins with the most peptides')
 def main(channel1, channel2, scaling,
          confidence, bin_width,
-         samples, chains,
+         samples, chains, batch_size, include_highest,
          infile, outfile):
 
     confidence = {
@@ -42,7 +46,9 @@ def main(channel1, channel2, scaling,
     grouped = False
 
     if bin_width is not None:  # only for ungrouped!
-        for name, df in read_df(infile, channel1, channel2, scaling, False):
+        for name, df in read_df(infile, channel1, channel2, scaling,
+                                grouped=False, batch_size=batch_size,
+                                include_highest=include_highest):
             print('Generating histogram')
             hist = model.fit_histogram(
                 df, channel1,
@@ -68,7 +74,9 @@ def main(channel1, channel2, scaling,
             hi: []
         }
 
-        for name, df in read_df(infile, channel1, channel2, scaling, grouped):
+        for name, df in read_df(infile, channel1, channel2, scaling,
+                                grouped=grouped, batch_size=batch_size,
+                                include_highest=include_highest):
             print(name)
             quants = model.fit_quantiles(
                 df, channel1,
@@ -98,7 +106,8 @@ def main(channel1, channel2, scaling,
         output.to_pkl(outfile)
 
 
-def read_df(infile, channel1, channel2, multiplier, grouped=True):
+def read_df(infile, channel1, channel2, multiplier, grouped=True,
+            batch_size=None, include_highest=None):
     baciq = pd.read_csv(infile).dropna(axis='columns', how='all')
 
     # Multiply by the factor
@@ -117,15 +126,27 @@ def read_df(infile, channel1, channel2, multiplier, grouped=True):
 
     baciq = baciq[['Protein ID', channel1, 'sum']]
 
+    if batch_size:
+        counts = baciq['Protein ID'].value_counts()
+        proteins = sorted(counts[counts > 1].index.tolist())
+        if batch_size < len(proteins):
+            np.random.seed(0)
+            proteins = np.random.choice(proteins, batch_size, replace=False)
+
+            if include_highest:
+                proteins = np.append(
+                    proteins,
+                    counts.nlargest(include_highest).index.values)
+
+            baciq = baciq.loc[
+                baciq['Protein ID'].isin(proteins)]
+
     if grouped:
+        # return one protein at a time
         for name, df in baciq.groupby('Protein ID'):
             if len(df) > 1:
                 yield name, df
     else:
-        counts = baciq['Protein ID'].value_counts()
-        inds = counts[counts < 24].index
-        baciq = baciq.loc[
-            baciq['Protein ID'].isin(inds)]
         yield 'all', baciq
 
 
