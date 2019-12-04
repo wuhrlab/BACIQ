@@ -125,6 +125,7 @@ def read_df(infile, channel1, channel2, multiplier, grouped=True,
         baciq['sum'] = baciq[channel2] + baciq[channel1]
 
     baciq = baciq[['Protein ID', channel1, 'sum']]
+    baciq = baciq.sort_values(by='Protein ID')
 
     if batch_size:
         counts = baciq['Protein ID'].value_counts()

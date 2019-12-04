@@ -12,15 +12,20 @@ class Histogram(base.BaseTrace):
         self.sample_count = {}
         self.remove_first = remove_first
 
-    def setup(self, draws, chains):
-        super().setup(draws, chains, None)
+    def setup(self, draws, chain):
+        self.chain = chain
+        super().setup(draws, chain, None)
 
     def record(self, point):
-        # TODO why won't this work?
         vals = {}
         for varname, value in zip(self.varnames, self.fn(point)):
             vals[varname] = value.ravel()
 
+        if self.chain not in self.sample_count:
+            self.sample_count[self.chain] = 0
+        self.sample_count[self.chain] += 1
+        if self.sample_count[self.chain] <= self.remove_first:
+            return
 
         for k, v in vals.items():
             if k not in self.hist:
@@ -28,10 +33,7 @@ class Histogram(base.BaseTrace):
                 num_bins = int(np.ceil(1 / self.bin_width))
                 self.hist[k] = np.zeros((len(v), num_bins), dtype=int)
                 self.cols[k] = np.array(range(len(v)))
-                self.sample_count[k] = 0
-            self.sample_count[k] += 1
-            if self.sample_count[k] <= self.remove_first:
-                return
+
             # increment position
             self.hist[k][self.cols[k],
                          np.floor(v/self.bin_width).astype(int)] += 1
