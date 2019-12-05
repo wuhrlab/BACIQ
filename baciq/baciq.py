@@ -24,13 +24,22 @@ import inference_methods
               help='Number of samples for MCMC per chain')
 @click.option('--chains', default=5,
               help='Number of MCMC chains')
+@click.option('--tuning', default=1000,
+              help='Number of burn in samples per chain')
 @click.option('--batch-size', default=None, type=int,
               help='Number of proteins to run at once')
 @click.option('--include-highest', default=None, type=int,
               help='Include the proteins with the most peptides')
-def main(channel1, channel2, scaling,
-         confidence, bin_width,
-         samples, chains, batch_size, include_highest,
+@click.option('--model-backend', default='pymc',
+              type=click.Choice(['pymc', 'pystan'], case_sensitive=False),
+              help='Which library to use for MCMC')
+@click.option('--pystan-pkl', type=str,
+              default=None,
+              help='Where to store compiled stan model.  Will speed up '
+              'subsequent runs of BACIQ when using pystan backend')
+def main(channel1, channel2, scaling, confidence, bin_width,
+         samples, chains, tuning, batch_size, include_highest,
+         model_backend, pystan_pkl,
          infile, outfile):
 
     confidence = {
@@ -38,23 +47,23 @@ def main(channel1, channel2, scaling,
         'high': 0.5 + confidence / 2,
     }
 
-    # model = inference_methods.Stan_Single('stan_single.pkl')
-    # model = inference_methods.PYMC_Single()
-    # grouped = True
+    if model_backend == 'pymc':
+        model = inference_methods.PYMC_Model(samples, chains, tuning, channel1)
+    elif model_backend == 'pystan':
+        model = inference_methods.Stan_Model(samples, chains, tuning,
+                                             channel1, pystan_pkl)
 
-    model = inference_methods.PYMC_Multiple()
-    grouped = False
-
-    if bin_width is not None:  # only for ungrouped!
-        for name, df in read_df(infile, channel1, channel2, scaling,
-                                grouped=False, batch_size=batch_size,
-                                include_highest=include_highest):
-            print('Generating histogram')
-            hist = model.fit_histogram(
-                df, channel1,
-                bin_width,
-                samples, chains
-            )
+    # TODO need to properly handle protein ids and multiple iterations of
+    # read df
+    # TODO reorganize to put read_df in another module, and most of this
+    # code in inference methods
+    # TODO add tests for everything!
+    if bin_width is not None:
+        print('Estimating histogram')
+        for df in read_df(infile, channel1, channel2, scaling,
+                          batch_size=batch_size,
+                          include_highest=include_highest):
+            hist = model.fit_histogram(df, bin_width)
 
         output = pd.DataFrame(
             hist, index=df['Protein ID'].unique(),
@@ -74,26 +83,17 @@ def main(channel1, channel2, scaling,
             hi: []
         }
 
-        for name, df in read_df(infile, channel1, channel2, scaling,
-                                grouped=grouped, batch_size=batch_size,
-                                include_highest=include_highest):
-            print(name)
+        print('Estimating quantiles')
+        for df in read_df(infile, channel1, channel2, scaling,
+                          batch_size=batch_size,
+                          include_highest=include_highest):
             quants = model.fit_quantiles(
-                df, channel1,
-                [confidence['low'], 0.5, confidence['high']],
-                samples, chains
-            )
+                df, [confidence['low'], 0.5, confidence['high']])
 
-            if grouped:
-                output['Protein ID'].append(name)
-                output[lo].append(quants[0])
-                output[mid].append(quants[1])
-                output[hi].append(quants[2])
-            else:
-                output['Protein ID'] = df['Protein ID'].unique()
-                output[lo] = quants[:, 0]
-                output[mid] = quants[:, 1]
-                output[hi] = quants[:, 2]
+            output['Protein ID'] = df['Protein ID'].unique()
+            output[lo] = quants[:, 0]
+            output[mid] = quants[:, 1]
+            output[hi] = quants[:, 2]
 
         output = pd.DataFrame(output)
 
@@ -106,7 +106,7 @@ def main(channel1, channel2, scaling,
         output.to_pkl(outfile)
 
 
-def read_df(infile, channel1, channel2, multiplier, grouped=True,
+def read_df(infile, channel1, channel2, multiplier,
             batch_size=None, include_highest=None):
     baciq = pd.read_csv(infile).dropna(axis='columns', how='all')
 
@@ -127,12 +127,16 @@ def read_df(infile, channel1, channel2, multiplier, grouped=True,
     baciq = baciq[['Protein ID', channel1, 'sum']]
     baciq = baciq.sort_values(by='Protein ID')
 
+    # TODO make this yield all proteins (shuffle then return slices)
     if batch_size:
         counts = baciq['Protein ID'].value_counts()
         proteins = sorted(counts[counts > 1].index.tolist())
+        # TODO if highest matter, remove highest from proteins and add to each
         if batch_size < len(proteins):
             np.random.seed(0)
             proteins = np.random.choice(proteins, batch_size, replace=False)
+            # TODO num_batches = math.ceil(len(proteins))
+            # for prots in np.array_split(proteins, num_batches):
 
             if include_highest:
                 proteins = np.append(
@@ -142,13 +146,13 @@ def read_df(infile, channel1, channel2, multiplier, grouped=True,
             baciq = baciq.loc[
                 baciq['Protein ID'].isin(proteins)]
 
-    if grouped:
-        # return one protein at a time
-        for name, df in baciq.groupby('Protein ID'):
-            if len(df) > 1:
-                yield name, df
+            yield baciq
+
+        else:
+            yield baciq
+
     else:
-        yield 'all', baciq
+        yield baciq
 
 
 if __name__ == '__main__':

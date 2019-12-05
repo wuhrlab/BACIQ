@@ -6,96 +6,130 @@ import pymc3 as pm
 import pickle
 import os
 import hist_backend
+import multiprocessing
 
 
+def get_num_cores():
+    if 'SLURM_CPUS_PER_TASK' in os.environ:
+        return int(os.environ['SLURM_CPUS_PER_TASK'])
+    else:
+        return multiprocessing.cpu_count()  # assume local
+
+
+# TODO need to handle protein names to rows better
 class Base_Modeler(ABC):
-    def __init__(self):
+    def __init__(self, samples, chains, tuning, channel):
         super().__init__()
+        self.samples = samples
+        self.chains = chains
+        self.tuning = tuning
+        self.channel = channel
 
     @abstractmethod
     def fit_quantiles(self,
                       data: pd.DataFrame,
-                      channel1: str,
-                      quantiles: np.array,
-                      samples: int,
-                      chains: int) -> np.array:
+                      quantiles: np.array) -> pd.DataFrame:
+        pass
+
+    @abstractmethod
+    def fit_histogram(self,
+                      data: pd.DataFrame,
+                      bin_width: float) -> pd.DataFrame:
         pass
 
 
-class Stan_Single(Base_Modeler):
-    def __init__(self, pickle_name):
-        super().__init__()
-        if os.path.exists(pickle_name):
+class Stan_Model(Base_Modeler):
+    def __init__(self, samples, chains, tuning, channel, pickle_name=None):
+        super().__init__(samples, chains, tuning, channel)
+        if pickle_name and os.path.exists(pickle_name):
             self.model = pickle.load(open(pickle_name, 'rb'))
 
         else:
             code = """data {
-                 int<lower=2> J;          // number of coins
-                 int<lower=0> y[J];       // heads in respective coin trials
-                 int<lower=0> n[J];       // total in respective coin trials
+                 int<lower=0> N_;  //number of data points
+                 int<lower=0> n_b;  //number of biologicaly unique proteins
+                 // vector that maps peptides to proteins
+                 int<lower=1, upper=n_b> condID[N_];
+                 int<lower=0> y[N_];  // heads in respective coin trials
+                 int<lower=0> n[N_];  // total in respective coin trials
             }
             parameters {
-                 real<lower = 0, upper = 1> mu;
-                 real<lower = 0> kappa;
+                 vector<lower=0, upper=1>[n_b] mu;
+                 vector<lower=0>[n_b] kappa;
+                 real<lower=0> tau;
             }
             transformed parameters {
-                real<lower=0> alpha;
-                real<lower=0> beta;
+                vector<lower=0>[n_b] alpha;
+                vector<lower=0>[n_b] beta;
+                vector<lower=0>[N_] alpha_big;
+                vector<lower=0>[N_] beta_big;
 
-                alpha = kappa * mu;
-                beta = kappa - alpha;
-            }
+                alpha= kappa .*  mu;
+                beta= kappa - alpha;
+
+                for(i in 1:N_){
+
+                  alpha_big[i] <- alpha[condID[i]];
+                  beta_big[i] <- beta[condID[i]];
+                  }
+
+             }
             model {
-                mu ~ uniform(0, 1);
-                kappa ~ exponential(0.05);
-                y ~ beta_binomial(n, alpha, beta);
+                tau ~ gamma(7.5, 1);
+
+                mu ~ normal(0.5, 1);
+                kappa ~ exponential(tau);
+
+                y ~ beta_binomial(n, alpha_big, beta_big);
             }
-
             """
+
             self.model = StanModel(model_name='baciq', model_code=code)
-            with open(pickle_name, 'wb') as f:
-                pickle.dump(self.model, f)
+            if pickle_name:
+                with open(pickle_name, 'wb') as f:
+                    pickle.dump(self.model, f)
 
-    def fit_quantiles(self, data, channel1, quantiles, samples, chains):
+    def fit_quantiles(self, data, quantiles):
+        samples = self.mcmc_sample(data)
+        # want sample X quantile, hence transpose
+        return np.quantile(samples, quantiles, axis=0).T
+
+    def fit_histogram(self, data, bin_width):
+        samples = self.mcmc_sample(data)
+        num_bins = int(np.ceil(1 / bin_width))
+        # want sample X count, hence transpose
+        return np.apply_along_axis(lambda r: np.histogram(r, bins=num_bins)[0],
+                                   arr=samples,
+                                   axis=0).T
+
+    def mcmc_sample(self, data):
+        idx = pd.Categorical(data['Protein ID']).codes
+        groups = np.unique(idx)
         fit = self.model.sampling(
-            chains=chains, iter=samples, warmup=5000, refresh=-1,
-            data={'J': len(data),  # Number of peptides
-                  'y': data[channel1],
+            chains=self.chains,
+            iter=self.samples + self.tuning,
+            warmup=self.tuning,
+            refresh=-1,
+            data={'N_': len(data),  # number of peptides
+                  'n_b': len(groups),  # number of proteins
+                  'condID': idx + 1,  # stan is 1-based
+                  'y': data[self.channel],
                   'n': data['sum']})
-        sim = fit.extract()
-        quants = pd.DataFrame(sim["mu"], columns=['mu']).quantile(quantiles)
-        return quants['mu'].values
+        return fit.extract(pars=["mu"])["mu"]
 
 
-class PYMC_Single(Base_Modeler):
-    def __init__(self):
-        super().__init__()
+class PYMC_Model(Base_Modeler):
+    def __init__(self, samples, chains, tuning, channel):
+        super().__init__(samples, chains, tuning, channel)
 
-    def fit_quantiles(self, data, channel1, quantiles, samples, chains):
-        with pm.Model():
-            μ = pm.Uniform('μ', 0, 1)
-            κ = pm.Exponential('κ', 0.05)
-            θ = pm.Beta('θ', alpha=μ*κ, beta=(1.0-μ)*κ)
-            pm.Binomial('y', p=θ, observed=data[channel1], n=data['sum'])
-            trace = pm.sample(samples, init='advi+adapt_diag', chains=chains)
-            return np.quantile(trace.get_values('μ'), quantiles)
-
-
-class PYMC_Multiple(Base_Modeler):
-    def __init__(self):
-        super().__init__()
-
-    def fit_quantiles(self, data, channel1, quantiles,
-                      samples, chains):
+    def fit_quantiles(self, data, quantiles):
         '''
-        Fit the model with supplied data.  If quantiles is set to a single
-        number, will return a histogram of the samples, otherwise the quantiles
-        will be returned.
+        Fit the model with supplied data returning quantiles
         '''
         bin_width = 0.0002
-        samples = self.mcmc_sample(data, channel1, samples,
-                                   chains, bin_width=bin_width)
+        samples = self.mcmc_sample(data, bin_width=bin_width)
 
+        # center of each bin
         bins = np.array(range(samples.shape[1])) * bin_width + bin_width / 2
         # scale counts by total, get cumsum
         quants = np.cumsum(samples / np.sum(samples, axis=1)[:, None], axis=1)
@@ -110,22 +144,15 @@ class PYMC_Multiple(Base_Modeler):
 
         return result
 
-    def fit_histogram(self, data, channel1, bin_width,
-                      samples, chains):
+    def fit_histogram(self, data, bin_width):
         '''
-        Fit the model with supplied data.  If quantiles is set to a single
-        number, will return a histogram of the samples, otherwise the quantiles
-        will be returned.
+        Fit the model with supplied data returning histogram
         '''
-        result = self.mcmc_sample(data, channel1, samples,
-                                  chains, bin_width)
+        result = self.mcmc_sample(data, bin_width)
 
         return result
 
-    def mcmc_sample(self, data, channel1, samples, chains, bin_width):
-        '''
-        fit the model, writing samples to sqlite database
-        '''
+    def mcmc_sample(self, data, bin_width):
         idx = pd.Categorical(data['Protein ID']).codes
         groups = np.unique(idx)
         with pm.Model():
@@ -134,13 +161,17 @@ class PYMC_Multiple(Base_Modeler):
             μ = BoundedNormal('μ', mu=0.5, sigma=1, shape=len(groups))
             κ = pm.Exponential('κ', τ, shape=len(groups))
             pm.BetaBinomial('y', alpha=μ[idx]*κ[idx], beta=(1.0-μ[idx])*κ[idx],
-                            n=data['sum'], observed=data[channel1])
+                            n=data['sum'], observed=data[self.channel])
             db = hist_backend.Histogram('hist', vars=[μ],
                                         bin_width=bin_width,
-                                        remove_first=1000)
+                                        remove_first=self.tuning)
             try:
-                pm.sample(samples, discard_tuned_samples=True,
-                          tune=1000, chains=chains, trace=db)
+                pm.sample(draws=self.samples,
+                          tune=self.tuning,
+                          chains=self.chains,
+                          cores=get_num_cores(),
+                          progressbar=True,  # TODO false when done testing, or make verbose?
+                          trace=db)
             except NotImplementedError:
                 pass  # since the db doesn't support slice
 
