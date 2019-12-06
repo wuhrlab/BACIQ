@@ -28,18 +28,8 @@ import inference_methods
               help='Number of burn in samples per chain')
 @click.option('--batch-size', default=None, type=int,
               help='Number of proteins to run at once')
-@click.option('--include-highest', default=None, type=int,
-              help='Include the proteins with the most peptides')
-@click.option('--model-backend', default='pymc',
-              type=click.Choice(['pymc', 'pystan'], case_sensitive=False),
-              help='Which library to use for MCMC')
-@click.option('--pystan-pkl', type=str,
-              default=None,
-              help='Where to store compiled stan model.  Will speed up '
-              'subsequent runs of BACIQ when using pystan backend')
 def main(channel1, channel2, scaling, confidence, bin_width,
-         samples, chains, tuning, batch_size, include_highest,
-         model_backend, pystan_pkl,
+         samples, chains, tuning, batch_size,
          infile, outfile):
 
     confidence = {
@@ -47,11 +37,7 @@ def main(channel1, channel2, scaling, confidence, bin_width,
         'high': 0.5 + confidence / 2,
     }
 
-    if model_backend == 'pymc':
-        model = inference_methods.PYMC_Model(samples, chains, tuning, channel1)
-    elif model_backend == 'pystan':
-        model = inference_methods.Stan_Model(samples, chains, tuning,
-                                             channel1, pystan_pkl)
+    model = inference_methods.PYMC_Model(samples, chains, tuning, channel1)
 
     # TODO need to properly handle protein ids and multiple iterations of
     # read df
@@ -61,8 +47,7 @@ def main(channel1, channel2, scaling, confidence, bin_width,
     if bin_width is not None:
         print('Estimating histogram')
         for df in read_df(infile, channel1, channel2, scaling,
-                          batch_size=batch_size,
-                          include_highest=include_highest):
+                          batch_size=batch_size):
             hist = model.fit_histogram(df, bin_width)
 
         output = pd.DataFrame(
@@ -85,8 +70,7 @@ def main(channel1, channel2, scaling, confidence, bin_width,
 
         print('Estimating quantiles')
         for df in read_df(infile, channel1, channel2, scaling,
-                          batch_size=batch_size,
-                          include_highest=include_highest):
+                          batch_size=batch_size):
             quants = model.fit_quantiles(
                 df, [confidence['low'], 0.5, confidence['high']])
 
@@ -106,9 +90,10 @@ def main(channel1, channel2, scaling, confidence, bin_width,
         output.to_pkl(outfile)
 
 
-def read_df(infile, channel1, channel2, multiplier,
-            batch_size=None, include_highest=None):
-    baciq = pd.read_csv(infile).dropna(axis='columns', how='all')
+def read_df(infile, channel1, channel2, multiplier, batch_size=None):
+    # TODO walk through this to see how and when sorting is an issue
+    baciq = pd.read_csv(infile, dtype={'Protein ID': 'category'}
+                        ).dropna(axis='columns', how='all')
 
     # Multiply by the factor
     numeric_columns = baciq.select_dtypes(include=['number']).columns
@@ -131,17 +116,11 @@ def read_df(infile, channel1, channel2, multiplier,
     if batch_size:
         counts = baciq['Protein ID'].value_counts()
         proteins = sorted(counts[counts > 1].index.tolist())
-        # TODO if highest matter, remove highest from proteins and add to each
         if batch_size < len(proteins):
             np.random.seed(0)
             proteins = np.random.choice(proteins, batch_size, replace=False)
             # TODO num_batches = math.ceil(len(proteins))
             # for prots in np.array_split(proteins, num_batches):
-
-            if include_highest:
-                proteins = np.append(
-                    proteins,
-                    counts.nlargest(include_highest).index.values)
 
             baciq = baciq.loc[
                 baciq['Protein ID'].isin(proteins)]
