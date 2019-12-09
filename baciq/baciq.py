@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import click
 import inference_methods
+import math
 
 
 @click.command()
@@ -39,59 +40,31 @@ def main(channel1, channel2, scaling, confidence, bin_width,
 
     model = inference_methods.PYMC_Model(samples, chains, tuning, channel1)
 
-    # TODO need to properly handle protein ids and multiple iterations of
-    # read df
     # TODO reorganize to put read_df in another module, and most of this
     # code in inference methods
     # TODO add tests for everything!
     if bin_width is not None:
         print('Estimating histogram')
-        for df in read_df(infile, channel1, channel2, scaling,
-                          batch_size=batch_size):
-            hist = model.fit_histogram(df, bin_width)
-
-        output = pd.DataFrame(
-            hist, index=df['Protein ID'].unique(),
-            columns=[bin_width*i for i in range(hist.shape[1])]
-        )
-
     else:
-        # formatting is necessary to handle floating point issues of columns
-        lo = f'{confidence["low"]:.9g}'
-        mid = str(0.5)
-        hi = f'{confidence["high"]:.9g}'
-
-        output = {  # Dict for pd
-            'Protein ID': [],
-            lo: [],
-            mid: [],
-            hi: []
-        }
-
         print('Estimating quantiles')
-        for df in read_df(infile, channel1, channel2, scaling,
-                          batch_size=batch_size):
-            quants = model.fit_quantiles(
+
+    for i, df in enumerate(read_df(infile, channel1, channel2, scaling,
+                                   batch_size=batch_size)):
+        if bin_width is not None:
+            output = model.fit_histogram(df, bin_width)
+        else:
+            output = model.fit_quantiles(
                 df, [confidence['low'], 0.5, confidence['high']])
 
-            output['Protein ID'] = df['Protein ID'].unique()
-            output[lo] = quants[:, 0]
-            output[mid] = quants[:, 1]
-            output[hi] = quants[:, 2]
-
-        output = pd.DataFrame(output)
-
-    if outfile.name.endswith('.csv'):
-        # %g handles floating point issues in row entries
-        output.to_csv(outfile,
-                      index=(bin_width is not None),
-                      float_format='%.9g')
-    else:
-        output.to_pkl(outfile)
+        # create first time, write on subsequent
+        if i == 0:
+            output.to_csv(outfile, float_format='%.9g')
+        else:
+            output.to_csv(outfile, float_format='%.9g',
+                          mode='a', header=False)
 
 
 def read_df(infile, channel1, channel2, multiplier, batch_size=None):
-    # TODO walk through this to see how and when sorting is an issue
     baciq = pd.read_csv(infile, dtype={'Protein ID': 'category'}
                         ).dropna(axis='columns', how='all')
 
@@ -110,22 +83,14 @@ def read_df(infile, channel1, channel2, multiplier, batch_size=None):
         baciq['sum'] = baciq[channel2] + baciq[channel1]
 
     baciq = baciq[['Protein ID', channel1, 'sum']]
-    baciq = baciq.sort_values(by='Protein ID')
 
-    # TODO make this yield all proteins (shuffle then return slices)
     if batch_size:
-        counts = baciq['Protein ID'].value_counts()
-        proteins = sorted(counts[counts > 1].index.tolist())
+        proteins = baciq['Protein ID'].cat.categories
         if batch_size < len(proteins):
-            np.random.seed(0)
-            proteins = np.random.choice(proteins, batch_size, replace=False)
-            # TODO num_batches = math.ceil(len(proteins))
-            # for prots in np.array_split(proteins, num_batches):
-
-            baciq = baciq.loc[
-                baciq['Protein ID'].isin(proteins)]
-
-            yield baciq
+            num_batches = math.ceil(len(proteins) / batch_size)
+            for i, prots in enumerate(np.array_split(proteins, num_batches)):
+                print(f'Batch {i+1} of {num_batches}. {len(prots)} proteins')
+                yield baciq.loc[baciq['Protein ID'].isin(prots)]
 
         else:
             yield baciq

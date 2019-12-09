@@ -14,7 +14,6 @@ def get_num_cores():
         return multiprocessing.cpu_count()  # assume local
 
 
-# TODO need to handle protein names to rows better
 class Base_Modeler(ABC):
     def __init__(self, samples, chains, tuning, channel):
         super().__init__()
@@ -45,7 +44,7 @@ class PYMC_Model(Base_Modeler):
         Fit the model with supplied data returning quantiles
         '''
         bin_width = 0.0002
-        samples = self.mcmc_sample(data, bin_width=bin_width)
+        proteins, samples = self.mcmc_sample(data, bin_width=bin_width)
 
         # center of each bin
         bins = np.array(range(samples.shape[1])) * bin_width + bin_width / 2
@@ -60,24 +59,35 @@ class PYMC_Model(Base_Modeler):
             else:
                 result = np.hstack((result, bins[idx].reshape((len(idx), 1))))
 
+        result = pd.DataFrame(result,
+                              index=proteins,
+                              columns=['{:.9g}'.format(q) for q in quantiles])
+        result.index.name = "Protein ID"
         return result
 
     def fit_histogram(self, data, bin_width):
         '''
         Fit the model with supplied data returning histogram
         '''
-        result = self.mcmc_sample(data, bin_width)
+        proteins, result = self.mcmc_sample(data, bin_width)
 
+        result = pd.DataFrame(result,
+                              index=proteins,
+                              columns=[bin_width*i
+                                       for i in range(result.shape[1])])
+        result.index.name = "Protein ID"
         return result
 
     def mcmc_sample(self, data, bin_width):
-        idx = pd.Categorical(data['Protein ID']).codes
-        groups = np.unique(idx)
+        proteins = data['Protein ID'].unique()
+        idx = np.zeros(len(data), dtype=int)
+        for i, p in enumerate(proteins):
+            idx[data['Protein ID'] == p] = i
         with pm.Model():
             τ = pm.Gamma('τ', alpha=7.5, beta=1)
             BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=1)
-            μ = BoundedNormal('μ', mu=0.5, sigma=1, shape=len(groups))
-            κ = pm.Exponential('κ', τ, shape=len(groups))
+            μ = BoundedNormal('μ', mu=0.5, sigma=1, shape=len(proteins))
+            κ = pm.Exponential('κ', τ, shape=len(proteins))
             pm.BetaBinomial('y', alpha=μ[idx]*κ[idx], beta=(1.0-μ[idx])*κ[idx],
                             n=data['sum'], observed=data[self.channel])
             db = hist_backend.Histogram('hist', vars=[μ],
@@ -93,4 +103,4 @@ class PYMC_Model(Base_Modeler):
             except NotImplementedError:
                 pass  # since the db doesn't support slice
 
-            return db.hist['μ']
+            return proteins, db.hist['μ']
