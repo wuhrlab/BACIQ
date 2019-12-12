@@ -8,7 +8,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         'Click',
-        'pystan',
+        'pymc3=3.7',
         'pandas'
     ],
     entry_points='''

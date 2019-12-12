@@ -1,5 +1,5 @@
 from io import StringIO
-import baciq
+from baciq import baciq
 import pandas as pd
 from pandas.testing import assert_frame_equal as afe
 import pytest
@@ -24,10 +24,10 @@ def file_gen():
     return _gen_file
 
 
-def test_read_df(file_gen):
+def old_test_read_df(file_gen):
     infile = file_gen()
     result = baciq.read_df(infile, 'ch0', 'ch1', 1)
-    name, df = next(result)
+    df = next(result)
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536'],
         'ch0': [180, 189],
@@ -38,7 +38,7 @@ def test_read_df(file_gen):
 
     infile = file_gen()
     result = baciq.read_df(infile, 'ch2', 'sum', 1.0/400)
-    name, df = next(result)
+    df = next(result)
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536'],
         'ch2': [1, 1],
@@ -49,8 +49,7 @@ def test_read_df(file_gen):
 
     infile = file_gen()
     result = baciq.read_df(infile, 'ch2', 'sum', 1.0/400, False)
-    name, df = next(result)
-    assert name == 'all'
+    df = next(result)
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536', 'BP677537'],
         'ch2': [1, 1, 1],
@@ -60,14 +59,14 @@ def test_read_df(file_gen):
         next(result)
 
 
-def test_read_df_with_non_numeric():
+def old_test_read_df_with_non_numeric():
     infile = StringIO(
             'Protein ID,peptide,ch0,ch1\n'
             'BP677536,p1,180.3139074,440.4864578\n'
             'BP677536,p2,189.4696091,458.6363471\n'
     )
     result = baciq.read_df(infile, 'ch0', 'ch1', 1)
-    name, df = next(result)
+    df = next(result)
     afe(df, pd.DataFrame({
         'Protein ID': ['BP677536', 'BP677536'],
         'ch0': [180, 189],
@@ -77,30 +76,7 @@ def test_read_df_with_non_numeric():
         next(result)
 
 
-def test_main(file_gen, mocker):
-    stanmodel = mocker.patch('baciq.inference_methods.Stan_Single')
-    stanmodel.return_value.fit_quantiles.return_value = [2.5, 50, 97.5]
-
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        with open('infile.csv', 'w') as infile:
-            infile.write(file_gen().getvalue())
-
-        result = runner.invoke(
-            baciq.main,
-            '-c1 ch0 -c2 ch1 -i infile.csv -o outfile.csv'.split())
-        assert result.exit_code == 0
-        out = pd.read_csv('outfile.csv')
-        afe(out, pd.DataFrame({
-            'Protein ID': ['BP677536'],
-            '0.025': [2.5],
-            '0.5': [50],
-            '0.975': [97.5],
-        }))
-        stanmodel.assert_called_once_with('stan_single.pkl')
-
-
-def test_main_two_prot(file_gen, mocker):
+def old_test_main_two_prot(file_gen, mocker):
     stanmodel = mocker.patch('baciq.inference_methods.Stan_Single')
     stanmodel.return_value.fit_quantiles.side_effect = [
         [2.5, 50, 97.5],

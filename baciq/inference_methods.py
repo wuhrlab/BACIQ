@@ -3,19 +3,35 @@ import pandas as pd
 import numpy as np
 import pymc3 as pm
 import os
-import hist_backend
+import sys
+import click
 import multiprocessing
+from typing import Tuple
+from baciq import hist_backend
 
 
-def get_num_cores():
+def get_num_cores() -> int:
     if 'SLURM_CPUS_PER_TASK' in os.environ:
         return int(os.environ['SLURM_CPUS_PER_TASK'])
     else:
         return multiprocessing.cpu_count()  # assume local
 
 
+def get_proteins_and_indices(data: pd.DataFrame) -> Tuple[pd.Series, np.array]:
+    proteins = data['Protein ID'].unique()
+    idx = np.zeros(len(data), dtype=int)
+    for i, p in enumerate(proteins):
+        idx[data['Protein ID'] == p] = i
+
+    return proteins, idx
+
+
 class Base_Modeler(ABC):
-    def __init__(self, samples, chains, tuning, channel):
+    def __init__(self,
+                 samples: int,
+                 chains: int,
+                 tuning: int,
+                 channel: str):
         super().__init__()
         self.samples = samples
         self.chains = chains
@@ -79,10 +95,7 @@ class PYMC_Model(Base_Modeler):
         return result
 
     def mcmc_sample(self, data, bin_width):
-        proteins = data['Protein ID'].unique()
-        idx = np.zeros(len(data), dtype=int)
-        for i, p in enumerate(proteins):
-            idx[data['Protein ID'] == p] = i
+        proteins, idx = get_proteins_and_indices(data)
         with pm.Model():
             τ = pm.Gamma('τ', alpha=7.5, beta=1)
             BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=1)
@@ -93,14 +106,12 @@ class PYMC_Model(Base_Modeler):
             db = hist_backend.Histogram('hist', vars=[μ],
                                         bin_width=bin_width,
                                         remove_first=self.tuning)
-            try:
-                pm.sample(draws=self.samples,
-                          tune=self.tuning,
-                          chains=self.chains,
-                          cores=get_num_cores(),
-                          progressbar=True,  # TODO false or make verbose?
-                          trace=db)
-            except NotImplementedError:
-                pass  # since the db doesn't support slice
+            pm.sample(draws=self.samples,
+                      tune=self.tuning,
+                      chains=self.chains,
+                      cores=get_num_cores(),
+                      progressbar=sys.stdout.isatty(),
+                      compute_convergence_checks=False,
+                      trace=db)
 
             return proteins, db.hist['μ']

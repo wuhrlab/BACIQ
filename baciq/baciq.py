@@ -1,11 +1,15 @@
 import pandas as pd
 import numpy as np
 import click
-import inference_methods
 import math
+from baciq import inference_methods
 
 
 @click.command()
+@click.option('-i', '--infile', type=click.File('r'),
+              help='Input csv file containing counts data')
+@click.option('-o', '--outfile', type=click.File('w'),
+              help='Output file, can be csv or csv.gz')
 @click.option('-c1', '--channel1',
               help='Column to use as "heads" in beta-binomial')
 @click.option('-c2', '--channel2',
@@ -13,11 +17,7 @@ import math
 @click.option('-s', '--scaling', default=1.0,
               help='Value to scale input data')
 @click.option('-c', '--confidence', default=0.95,
-              help='Confidence level to return')
-@click.option('-i', '--infile', type=click.File('r'),
-              help='Input csv file containing counts data')
-@click.option('-o', '--outfile', type=click.File('w'),
-              help='Output file, can be csv or pkl')
+              help='Confidence level of quantiles to report')
 @click.option('-b', '--bin-width', type=float, default=None,
               help='Bin width for histogram output.  If specified, '
               'confidence will be ignored')
@@ -78,14 +78,15 @@ def read_df(infile, channel1, channel2, multiplier, batch_size=None):
 
     # Sum up the information of requested channels
     if channel2 == 'sum':
-        baciq[channel2] = baciq.iloc[:, 1:].sum(axis=1)
+        baciq[channel2] = baciq[numeric_columns].values.sum(axis=1)
     else:
         baciq['sum'] = baciq[channel2] + baciq[channel1]
 
     baciq = baciq[['Protein ID', channel1, 'sum']]
 
     if batch_size:
-        proteins = baciq['Protein ID'].cat.categories
+        proteins = baciq['Protein ID'].cat.categories.to_list()
+        np.random.shuffle(proteins)
         if batch_size < len(proteins):
             num_batches = math.ceil(len(proteins) / batch_size)
             for i, prots in enumerate(np.array_split(proteins, num_batches)):

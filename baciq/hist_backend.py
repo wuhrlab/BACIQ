@@ -37,3 +37,15 @@ class Histogram(base.BaseTrace):
             # increment position
             self.hist[k][self.cols[k],
                          np.floor(v/self.bin_width).astype(int)] += 1
+
+    def _slice(self, idx):
+        return self
+
+    def __len__(self):
+        return self.sample_count[self.chain]
+
+    def get_values(self, varname: str, burn=0, thin=1):
+        return self.hist[varname]
+
+    def point(self, idx):
+        return {varname: 0 for varname in self.hist}
