@@ -1,7 +1,7 @@
 # BACIQ
-BACIQ is the python program associated with our paper "Bayesian
+BACIQ is the python program associated with our paper ["Bayesian
 Confidence Intervals for Multiplexed Proteomics Integrate Ion-Statistics
-with Peptide Quantification Concordance".
+with Peptide Quantification Concordance"](https://doi.org/10.1074/mcp.TIR119.001317).
 
 ## Requirements
 1. Unix/Linux Operating System
