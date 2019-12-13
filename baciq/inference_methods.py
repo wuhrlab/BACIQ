@@ -4,7 +4,6 @@ import numpy as np
 import pymc3 as pm
 import os
 import sys
-import click
 import multiprocessing
 from typing import Tuple
 from baciq import hist_backend
@@ -18,6 +17,9 @@ def get_num_cores() -> int:
 
 
 def get_proteins_and_indices(data: pd.DataFrame) -> Tuple[pd.Series, np.array]:
+    if 'Protein ID' not in data:
+        raise KeyError('Expected "Protein ID" in input data')
+
     proteins = data['Protein ID'].unique()
     idx = np.zeros(len(data), dtype=int)
     for i, p in enumerate(proteins):
@@ -59,17 +61,17 @@ class PYMC_Model(Base_Modeler):
         '''
         Fit the model with supplied data returning quantiles
         '''
-        bin_width = 0.0002
+        bin_width = 0.0001
         proteins, samples = self.mcmc_sample(data, bin_width=bin_width)
 
-        # center of each bin
-        bins = np.array(range(samples.shape[1])) * bin_width + bin_width / 2
+        bins = np.array(range(samples.shape[1])) * bin_width
         # scale counts by total, get cumsum
         quants = np.cumsum(samples / np.sum(samples, axis=1)[:, None], axis=1)
 
         result = None
         for q in quantiles:
-            idx = np.argmin(np.abs(quants - q), axis=1)
+            # idx = np.argmin(np.abs(quants - q), axis=1)
+            idx = np.argmax(quants >= q, axis=1)
             if result is None:
                 result = bins[idx].reshape((len(idx), 1))
             else:
@@ -103,7 +105,7 @@ class PYMC_Model(Base_Modeler):
             κ = pm.Exponential('κ', τ, shape=len(proteins))
             pm.BetaBinomial('y', alpha=μ[idx]*κ[idx], beta=(1.0-μ[idx])*κ[idx],
                             n=data['sum'], observed=data[self.channel])
-            db = hist_backend.Histogram('hist', vars=[μ],
+            db = hist_backend.Histogram(vars=[μ],
                                         bin_width=bin_width,
                                         remove_first=self.tuning)
             pm.sample(draws=self.samples,

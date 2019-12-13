@@ -1,7 +1,8 @@
 # BACIQ
-BACIQ is the python program associated with our paper ["Bayesian
-Confidence Intervals for Multiplexed Proteomics Integrate Ion-Statistics
-with Peptide Quantification Concordance"](https://doi.org/10.1074/mcp.TIR119.001317).
+BACIQ is the python program associated with our paper:\
+["Bayesian Confidence Intervals for Multiplexed Proteomics Integrate\
+Ion-Statistics with Peptide Quantification
+Concordance"](https://doi.org/10.1074/mcp.TIR119.001317).
 
 ## Requirements
 1. Unix/Linux Operating System
@@ -68,4 +69,4 @@ Options:
 Depending on the values of `confidence` and `bin-width`, the output will be a
 table of quantiles or histograms.  Each row contains information on one 
 Protein ID (first column) and the columns are labeled with the quantile or bin.
-The output order is sorted within batches.
+The output order reflects the input sorting within batches.

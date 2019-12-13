@@ -40,13 +40,10 @@ def main(channel1, channel2, scaling, confidence, bin_width,
 
     model = inference_methods.PYMC_Model(samples, chains, tuning, channel1)
 
-    # TODO reorganize to put read_df in another module, and most of this
-    # code in inference methods
-    # TODO add tests for everything!
     if bin_width is not None:
-        print('Estimating histogram')
+        click.secho('Estimating histogram', fg='yellow', bold=True)
     else:
-        print('Estimating quantiles')
+        click.secho('Estimating quantiles', fg='yellow', bold=True)
 
     for i, df in enumerate(read_df(infile, channel1, channel2, scaling,
                                    batch_size=batch_size)):
@@ -90,7 +87,10 @@ def read_df(infile, channel1, channel2, multiplier, batch_size=None):
         if batch_size < len(proteins):
             num_batches = math.ceil(len(proteins) / batch_size)
             for i, prots in enumerate(np.array_split(proteins, num_batches)):
-                print(f'Batch {i+1} of {num_batches}. {len(prots)} proteins')
+                click.secho(
+                    f'Batch {i+1} of {num_batches}. {len(prots)} proteins',
+                    fg='yellow', bold=True
+                )
                 yield baciq.loc[baciq['Protein ID'].isin(prots)]
 
         else:
