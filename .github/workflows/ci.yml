@@ -1,0 +1,29 @@
+---
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.7
+        uses: actions/setup-python@v1
+        with:
+          python-version: 3.7
+
+      - name: Update Conda environment
+        uses: matthewrmshin/conda-action@v1
+        with:
+          args: conda env update -f ./requirements.yml
+
+      - name: Run pytest
+        uses: matthewrmshin/conda-action@v1
+        with:
+          args: pytest
