@@ -1,4 +1,4 @@
-![](https://github.com/troycomi/BACIQ/workflows/CI/badge.svg)
+![](https://github.com/wuhrlab/BACIQ/workflows/CI/badge.svg)
 
 # BACIQ
 BACIQ is the python program associated with our paper:\
