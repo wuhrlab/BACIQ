@@ -1,0 +1,7 @@
+*.csv
+__pycache__/
+*.pyc
+*.pkl
+Output/
+*.log
+*.egg-info/
